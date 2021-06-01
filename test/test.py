@@ -1,16 +1,15 @@
 import echo
 
-src = echo.Src()
+def main():
+    dmso = echo.Cpd(name = 'dmso', vol = 50)
+    fa = echo.Cpd(name = 'fa', vol=10)
 
-for i, j in zip(echo.vwells, ['cpd1','cpd2','cpd3']):
-        src.fill(well = i, name = j, vol = 20)
+    dest = echo.Dest()
+    dest.fill('A1', dmso, 2)
+    dest.fill('A1', fa, 5)
+    print([i.contents for i in dest.wells.values()])
+    print(dest.df)
 
-dest = echo.Dest()
 
-dest.make_blocks(shape = (8,2))
-
-for i in dest.blocks:
-        for j, k in zip(i[:,0], i[0,:]):
-                src.xfer('cpd1', j, 10)
-                src.xfer('cpd1', k, 10)
-
+if __name__ == '__main__':
+    main()
