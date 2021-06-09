@@ -1,31 +1,141 @@
+# todo
+# round nearest 2.5 nl
+# xfer report -> nl
+# xfer report overwritten?
+import copy
 import random
 from string import ascii_uppercase
 import numpy as np
 import pandas as pd
 
+round2p5 = lambda x : round(x/2.5) * 2.5
+
 class Cpd:
-    def __init__(self, name = None, vol = None, parent = None):
-        self.uid = ''.join(random.choices(ascii_uppercase, k=8))  # useless?
+    def __init__(self, name = None, vol = 0, parent = None, plate = None, well = None):
         self.name = name 
         self.vol = vol
         self.children = []
-    def allocate(self, well):
-        self.src_wells.append(well)
+        self.parent = parent
+        self.plate = plate
+        self.well = well
+    def __repr__(self):
+        if self.plate is not None:
+            plate_name = self.plate.name
+        else: 
+            plate_name = None
+        if self.well is not None:
+            well_loc = self.well.loc
+        else:
+            well_loc = None
+        return f'{self.name} {self.vol}µl  plate: {plate_name} well: {well_loc}'
     def sample(self, vol):
         if vol < self.vol:
-            self.vol -= vol
-            sample = Cpd(name = self.name, vol = vol, parent = self)
+            self.vol -= vol 
+            sample = Cpd(self.name, vol, parent = self)
             self.children.append(sample)
             return sample
         else:
-            raise OverDrawnException(f'Cpd {self.name} overdrawn available: {self.vol} requested: {vol}')
-        # todo - xfer method
-    def xfer(self, dest, vol):
-        # handle well id
-        pass
+            raise OverDrawnException(f'Requested vol: {vol} Available vol: {self.vol}µl')
+    def xfer(self, dest_well, vol):
+        # find all children, make transfers
+        children = self.get_children()
+        available_vol = sum([i.well.available_vol for i in children])
+        if vol <= available_vol:
+            unique_plates = set([i.plate for i in children])
+            vol_todo = vol # copy????
+            for i in unique_plates:
+                wells = [j for j in children if j.plate == i]
+                for j in wells:
+                    if isinstance(j.well, SrcWell):
+                        available_vol = j.well.available_vol 
+                        if vol_todo > available_vol:
+                            xfer_vol = available_vol 
+                        else:
+                            xfer_vol = vol_todo
+                        if xfer_vol != 0: 
+                            j.well.xfer(dest_well, xfer_vol)
+                            vol_todo -= xfer_vol
+                        if vol_todo == 0:
+                            break
+        else:
+            raise NotEnoughException(f'cpd:{self}, available_vol: {available_vol}µl, requested: {vol}µl')
+        if vol_todo != 0:
+            raise UnderFillWarning(f'cpd:{self}, available_vol: {available_vol}µl, requested: {vol}µl')
+
+    def get_children(self):
+        l = []
+        if len(self.children) > 0:
+            for i in self.children:
+                l.append(i)
+                l.append(i.get_children())
+        # from https://stackoverflow.com/questions/12472338/flattening-a-list-recursively
+        flatten=lambda l: sum(map(flatten,l),[]) if isinstance(l,list) else [l] 
+        return flatten(l)
+
+class Mixture:
+    def __init__(self, cpds = []):
+        self.cpds = cpds
+    def __repr__(self):
+        if len(self.cpds) != 0:
+            d = {i.name:i.vol for i in self.cpds}
+        else:
+            d = {}
+        return f'{d}'
+    @property
+    def vol(self):
+        return sum([i.vol for i in self.cpds])
+    def sample(self, vol):
+        if vol < self.vol:
+            fracs = [i.vol / self.vol  for i in self.cpds]
+            sample = Mixture([i.sample(j * vol) for i, j in zip(self.cpds, fracs)]) # **prob
+            self.consolidate()
+            sample.consolidate()
+            return sample
+        else:
+            raise OverDrawnException(f'Requested vol: {vol}µl Available vol: {self.vol}µl')
+    def append(self, cpd):
+        if isinstance(cpd, Cpd):
+            self.cpds.append(cpd)
+        elif isinstance(cpd, Mixture):
+            self.cpds += cpd.cpds 
+        else:
+            # error 
+            print('uh oh')
+        self.consolidate()
+    def consolidate(self):
+        # pool compounds with matching names
+        l = []
+        uniq_names = set([i.name for i in self.cpds])
+        for i in uniq_names:
+            l2 = []
+            for j in self.cpds:
+                if j.name == i:
+                    l2.append(j)
+            assert len(l2) != 0
+            l.append(Cpd(name=i, vol=sum([k.vol for k in l2])))
+        self.cpds = l
 
 class Well:
-    def __init__(self, contents = None, vol = 0, plateid = None, loc = None, ldv = True):
+    def __init__(self, loc, plate=None, contents=None):
+        self.loc = loc
+        self.plate = plate
+        self.contents = Mixture([]) ### why does the default not register???
+        # leaving this lime Mixture() was really problematic
+        # it made all instances of mixture the same
+        # copying issue????
+    @property
+    def vol(self):
+        return self.contents.vol
+    def __repr__(self):
+        return f'plate: {self.plate} loc: {self.loc}  contents: {self.contents}'
+    def fill(self, sample):
+        sample.well = self
+        sample.plate = self.plate
+        self.contents.append(sample)
+
+class SrcWell(Well):
+    def __init__(self, ldv=True, **args):
+        super().__init__(**args)
         self.ldv = ldv
         if self.ldv:
             self.minvol = 2.5
@@ -33,80 +143,83 @@ class Well:
         else:
             self.minvol = 15
             self.maxvol = 65
-        #self.cpd = cpd # todo - mixture  flexibility for dest plates
-        self.plateid = plateid
-        self.loc = loc
-        self.uid = ''.join(random.choices(ascii_uppercase, k=8))
-
+        self.xfer_record = []
+    def __repr__(self):
+        return f'plate: {self.plate} loc: {self.loc}  contents: {self.contents} available_vol: {self.available_vol}µl'
     @property
-    def vol(self):
-        return self.cpd.vol
-    def fill(self, cpd, vol):
-        if cpd.vol > self.maxvol:
-            raise OverFillException(f'requested fill vol: {vol} \t max vol: {self.maxvol}')
-        if cpd.vol < self.minvol:
-            raise UnderFillWarning(f'Well: {self.loc} fill - compound: {cpd.name} - {cpd.vol} < min vol ({self.minvol})')
-        self.cpd = cpd.sample(vol) # weak - can be overwritten, only handles 1 compount
-    def xfer(self, dest_plate, dest_loc, vol):
-        # todo future: mutiple compounds - div vol equally, mixture class?
-        # register transfer in objects
-        # return dict? -> dataFrame
-        dest_plate.wells[dest_loc].fill(self.cpd.sample(vol))
-
+    def available_vol(self):
+        available = self.vol - self.minvol
+        if available > 0:
+            return available
+        else:
+            return 0
+    def xfer(self, dest_well, vol):
+        if vol <= self.available_vol:
+            dest_well.fill(self.contents.sample(vol))
+            self.xfer_record.append({'SrcPlate':self.plate.name, 'SrcWell':self.loc, 'Destination Plate Name':dest_well.plate.name, 'DestWell':dest_well.loc,  'Transfer Volume /nl':round2p5(vol * 1000)}) # nl
+        else:
+            raise OverDrawnException(f'Requested vol: {vol}µl Available vol: {self.available_vol}µl')
 
 class Plate:
-    def __init__(self, name = None, wells = 384, ldv = True):
+    def __init__(self, name=None, nwells = 384):
+        super().__init__()
         self.name = name
-        self.uid = ''.join(random.choices(ascii_uppercase, 
-                                        k=8))
-        self.ldv = ldv
-        self.wells = {i:Well(plateid = self.uid, ldv = self.ldv) for i in hwells}
-    @property
-    def df(self):
-        return pd.DataFrame(\
-                [[i, j.name, j.vol] for i in self.wells for j in self.wells[i].contents], 
-                columns = ['well','compound','vol'])
-    def fill(self, loc, cpd, vol = None):
-        # better in Dest?
-        if vol is None:
-            if self.ldv:
-                vol = 12
-            else:
-                vol = 60
-        self.wells[loc].fill(cpd.sample(vol))
+        self.wells = self.make_wells(nwells)
+    def __repr__(self):
+        return f'{self.name} {len(self)}'
+    def __len__(self):
+        return len(self.wells)
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            k = list(self.wells.keys())[item]
+            return self.wells[k]
+        if isinstance(item, slice):
+            k = list(self.wells.keys())[item]
+            return [self.wells[i] for i in k]
+        else:
+            return self.wells[item]
+    def __iter__(self):
+        for i in self.wells:
+            yield self.wells[i]
+    def loc(self, idx):
+        # return sliceable slice of cols / rows
+        pass
+    def make_wells(self, nwells, well_type = Well, **args):
+        assert nwells in [96, 384, 1536]
+        # ncols = 1.5 *nrows
+        # nwells = 1.5 * nrows**2
+        nrows = int(np.sqrt(nwells/1.5))
+        ncols = int(nrows * 1.5)
+        rows = list(ascii_uppercase[:nrows])
+        cols = range(1, ncols+1)
+        well_ids = [f'{i}{j}' for i in rows for j in cols]
+        return {i:well_type(loc=i, plate = self, **args) for i in well_ids}
 
-class Src(Plate):
+class SrcPlate(Plate):
+    def __init__(self, ldv=True, **args):
+        self.ldv = ldv
+        super().__init__(**args)
+        self.wells = self.make_wells(len(self), well_type = SrcWell, ldv=self.ldv)
+    @property
+    def xfer_record(self):
+        return [j for i in self for j in i.xfer_record] ## flattens list
+
+class DestPlate(Plate):
     def __init__(self, **args):
         super().__init__(**args)
-    def assign(self, wells):
-        if isinstance(wells, list):
-            for i in wells:
-                self.wells[i.loc] = i
-        if isinstance(wells, Well):
-            self.wells[wells.loc] = wells
 
-class Dest(Plate):
-    def __init__(self):
-        super().__init__()
-        self.wells = {i:Well() for i in hwells}
-        self.blocks = None
 
-class Block:
-    def __init__(self, a, b, wells):
-        self.a = a 
-        self.b = b
-        self.wells = wells
-        self.k = 3
-        self.vol = 1.5 # µl
-        # assign wells - Dest method?
-
-class OverDrawnException(Exception):
+class NotEnoughException(Exception):
     pass
 
-class OverFillException(Exception):
+class OverDrawnException(Exception):
     pass
 
 class UnderFillWarning(Warning):
     pass
 
+class OverFillWarning(Warning):
+    pass
+
 hwells = [f'{i}{j}' for i in ascii_uppercase[:16] for j in range(1,25)]
+vwells = [f'{i}{j}' for i in range(1,25) for j in ascii_uppercase[:16]]
