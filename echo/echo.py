@@ -1,10 +1,9 @@
-# todo
-# round nearest 2.5 nl
-# xfer report -> nl
-# xfer report overwritten?
+import os.path as osp
+import ast
 import copy
 import random
 from string import ascii_uppercase
+import json
 import numpy as np
 import pandas as pd
 
@@ -154,9 +153,10 @@ class SrcWell(Well):
         else:
             return 0
     def xfer(self, dest_well, vol):
+        get_cpd_names = lambda mixture : [i.name for i in mixture.cpds]
         if vol <= self.available_vol:
             dest_well.fill(self.contents.sample(vol))
-            self.xfer_record.append({'SrcPlate':self.plate.name, 'SrcWell':self.loc, 'Destination Plate Name':dest_well.plate.name, 'DestWell':dest_well.loc,  'Transfer Volume /nl':round2p5(vol * 1000)}) # nl
+            self.xfer_record.append({'SrcPlate':self.plate.name, 'Cpd':get_cpd_names(self.contents), 'SrcWell':self.loc, 'Destination Plate Name':dest_well.plate.name, 'DestWell':dest_well.loc,  'Transfer Volume /nl':round2p5(vol * 1000)}) # nl
         else:
             raise OverDrawnException(f'Requested vol: {vol}µl Available vol: {self.available_vol}µl')
 
@@ -194,6 +194,9 @@ class Plate:
         cols = range(1, ncols+1)
         well_ids = [f'{i}{j}' for i in rows for j in cols]
         return {i:well_type(loc=i, plate = self, **args) for i in well_ids}
+    @property
+    def map(self):
+        return pd.DataFrame([{'plate':self.name,'well':i.loc,'contents':i.contents,'vol':i.vol} for i in self])
 
 class SrcPlate(Plate):
     def __init__(self, ldv=True, **args):
@@ -202,12 +205,84 @@ class SrcPlate(Plate):
         self.wells = self.make_wells(len(self), well_type = SrcWell, ldv=self.ldv)
     @property
     def xfer_record(self):
-        return [j for i in self for j in i.xfer_record] ## flattens list
+        return pd.DataFrame([j for i in self for j in i.xfer_record]) ## flattens list
 
 class DestPlate(Plate):
     def __init__(self, **args):
         super().__init__(**args)
 
+
+class ExceptionsReport(Plate):
+    # aim:
+    # map compound concs to wells
+    # account for exceptions
+    # handle plate map or picklist input
+    def __init__(self, exceptions_report = None, picklist = None, platemap=None, **args):
+        super().__init__(**args)
+        self.platemap = platemap # plate(s) or picklist
+        self.exceptions_report = exceptions_report # exceptions report csv
+        self.picklist = picklist
+        self.process()
+
+    def __repr__(self):
+        return f''
+    def process(self):
+        platemap_allocations = {}
+        if self.platemap is not None:
+            platemap = pd.read_csv(self.platemap, index_col=0)
+            for i,j in zip(platemap['well'],platemap['contents']):
+                platemap_allocations[i] = ast.literal_eval(j)
+
+        picklist_allocations = {} # dest
+        picklist_src_allocations = {}
+        if self.picklist is not None:
+            if isinstance(self.picklist, str):
+                picklist = pd.read_csv(self.picklist, index_col=0)
+            elif isinstance(self.picklist,list):
+                picklist = pd.concat([pd.read_csv(i, index_col=0) for i in self.picklist])
+
+            for plate in picklist['Destination Plate Name'].unique():
+                this_plate_allocation = {}
+                chunk = picklist.loc[picklist['Destination Plate Name'] == plate,:]
+                for well in chunk['DestWell'].unique():
+                    chunkchunk = chunk.loc[chunk['DestWell'] == well,:] # cpds are like: ["['S4204']", "['dmso']"]
+                    cpds = [j for i in chunkchunk['Cpd'] for j in ast.literal_eval(i)] # flatten
+                    vols = chunkchunk['Transfer Volume /nl']
+                    this_plate_allocation[well] = {i:j for i,j in zip(cpds,vols)}
+                picklist_allocations[plate] = this_plate_allocation 
+            for plate in picklist['Source Plate Name'].unique():
+                this_plate_allocation = {}
+                chunk = picklist.loc[picklist['Source Plate Name'] == plate,:]
+                for well in chunk['DestWell'].unique():
+                    chunkchunk = chunk.loc[chunk['SrcWell'] == well,:] # cpds are like: ["['S4204']", "['dmso']"]
+                    cpds = [j for i in chunkchunk['Cpd'] for j in ast.literal_eval(i)] # flatten
+                    vols = chunkchunk['Transfer Volume /nl']
+                    this_plate_allocation[well] = {i:j for i,j in zip(cpds,vols)}
+                picklist_src_allocations[plate] = this_plate_allocation 
+        else:
+            picklist = None
+
+        if self.exceptions_report is not None:
+            if isinstance(self.exceptions_report, str):
+                exceptions_report = pd.read_csv(self.exceptions_report)
+            elif isinstance(self.exceptions_report,list):
+                exceptions_report = pd.concat([pd.read_csv(i) for i in self.exceptions_report])
+            if picklist is not None:
+                # i really hope order is preserved...
+                exceptions_report_plate_names = sorted(exceptions_report['Destination Plate Name'].unique().tolist()) # ['Destination[2]', 'Destination[3]', 'Destination[4]', 'Destination[5]']
+                picklist_plate_names = picklist['Destination Plate Name'].unique().tolist() # ['dest-bsa-blank', 'dest-bsa-test', 'dest-ctrl-blank', 'dest-ctrl-test']
+                if len(exceptions_report_plate_names) == len(picklist_plate_names):
+                    plate_name_map = dict(zip(exceptions_report_plate_names, picklist_plate_names))
+                else:
+                    raise IHaventWrittenThisWellException('number of plates in exceptions_report doesnt match picklist. james fix this!')
+                exceptions_report['Destination Plate Name'] = [plate_name_map[i] for i in exceptions_report['Destination Plate Name']]
+                # todo:
+                ## map cpds to src plate
+                ## correct cpd vol
+                ## write to wells
+                
+        print(exceptions_report.columns)
+            
 
 class NotEnoughException(Exception):
     pass
@@ -219,6 +294,9 @@ class UnderFillWarning(Warning):
     pass
 
 class OverFillWarning(Warning):
+    pass
+
+class IHaventWrittenThisWellException(Exception):
     pass
 
 hwells = [f'{i}{j}' for i in ascii_uppercase[:16] for j in range(1,25)]
