@@ -5,7 +5,6 @@ import random
 from string import ascii_uppercase
 import json
 import numpy as np
-import pandas as pd
 
 round2p5 = lambda x : round(x/2.5) * 2.5
 
@@ -78,28 +77,30 @@ class Mixture:
     class for mixtures of compounds
     '''
     def __init__(self, 
-                 *args):
-        self.cpds = list(args)
+                 *args,
+                 name=None):
+        self.cpds = [i for i in args if i is not None]
+        self.name = name
 
+    def __iter__(self):
+        for i in self.cpds:
+            yield self.cpds[i]
     def __call__(self, vol):
         assert isinstance(vol, float) or isinstance(vol, int)
         return self.sample(vol)
     def __add__(self, x):
         assert isinstance(x, Cpd) or isinstance(x, Mixture)
-        self.add(x)
+        if isinstance(x, Cpd):
+            self.cpds.append(x)
+        elif isinstance(x, Mixture):
+            for i in x:
+                self + i
         return self
     def __sub__(self, x):
         assert isinstance(x, float) or isinstance(x, int)
         return self(x)
-    def __sub__(self, x):
-        assert isinstance(x, Cpd) or isinstance(x, Mixture)
-        return self.sample(x.vol)
     def __repr__(self):
-        if len(self.cpds) != 0:
-            d = {i.name:i.vol for i in self.cpds}
-        else:
-            d = {}
-        return f'{d}'
+        return f'{self.cpds}'
 
     @property
     def vol(self):
@@ -118,12 +119,11 @@ class Mixture:
 
     def add(self, cpd):
         ''' add Cpd to mixture '''
+        assert isinstance(cpd, Cpd) or isinstance(cpd, Mixture)
         if isinstance(cpd, Cpd):
             self.cpds.append(cpd)
         elif isinstance(cpd, Mixture):
             self.cpds += cpd.cpds 
-        else:
-            raise Exception('uh oh')
 
 class Well:
     ''' class for plate wells
@@ -135,20 +135,28 @@ class Well:
             fill
     '''
     def __init__(self, 
-                 loc, 
+                 loc=None, 
                  plate=None, 
                  contents=None):
         self.loc = loc
         self.plate = plate
-        self.contents = Mixture([]) ### why does the default not register???
-        # leaving this lime Mixture() was really problematic
-        # it made all instances of mixture the same
-        # copying issue????
+        self.contents = Mixture()
+        self.xfer_record = []
+
+    def __call__(self, vol):
+        assert isinstance(vol, float) or isinstance(vol, int)
+        return self.contents(vol)
+    def __add__(self, x):
+        assert isinstance(x, Cpd) or isinstance(x, Mixture)
+        return self.contents + x
+    def __sub__(self, x):
+        assert isinstance(x, float) or isinstance(x, int)
+        return self(x)
+    def __repr__(self):
+        return f'plate: {self.plate} loc: {self.loc}  contents: {self.contents}'
     @property
     def vol(self):
         return self.contents.vol
-    def __repr__(self):
-        return f'plate: {self.plate} loc: {self.loc}  contents: {self.contents}'
     def fill(self, sample):
         sample.well = self
         sample.plate = self.plate
@@ -168,9 +176,9 @@ class SrcWell(Well):
         else:
             self.minvol = 15
             self.maxvol = 65
-        self.xfer_record = []
     def __repr__(self):
         return f'plate: {self.plate} loc: {self.loc}  contents: {self.contents} available_vol: {self.available_vol}µl'
+
     @property
     def available_vol(self):
         available = self.vol - self.minvol
@@ -182,7 +190,14 @@ class SrcWell(Well):
         get_cpd_names = lambda mixture : [i.name for i in mixture.cpds]
         if vol <= self.available_vol:
             dest_well.fill(self.contents.sample(vol))
-            self.xfer_record.append({'SrcPlate':self.plate.name, 'Cpd':get_cpd_names(self.contents), 'SrcWell':self.loc, 'Destination Plate Name':dest_well.plate.name, 'DestWell':dest_well.loc,  'Transfer Volume /nl':round2p5(vol * 1000)}) # nl
+            xfer = {'SrcPlate':self.plate.name, 
+                    'Cpd':get_cpd_names(self.contents),
+                    'SrcWell':self.loc,
+                    'Destination Plate Name':dest_well.plate.name,
+                    'DestWell':dest_well.loc,
+                    'Transfer Volume /nl':round2p5(vol * 1000)}
+            self.xfer_record.append(xfer) # nl
+            dest_well.plate.xfer_record.append(xfer)
         else:
             raise OverDrawnException(f'Requested vol: {vol}µl Available vol: {self.available_vol}µl')
 
@@ -207,14 +222,11 @@ class Plate:
         if isinstance(item, slice):
             k = list(self.wells.keys())[item]
             return [self.wells[i] for i in k]
-        else:
+        elif isinstance(item,str):
             return self.wells[item]
     def __iter__(self):
         for i in self.wells:
             yield self.wells[i]
-    def loc(self, idx):
-        # return sliceable slice of cols / rows
-        pass
     def make_wells(self, nwells, well_type = Well, **args):
         assert nwells in [96, 384, 1536]
         # ncols = 1.5 *nrows
@@ -227,7 +239,13 @@ class Plate:
         return {i:well_type(loc=i, plate = self, **args) for i in well_ids}
     @property
     def map(self):
-        return pd.DataFrame([{'plate':self.name,'well':i.loc,'contents':i.contents,'vol':i.vol} for i in self])
+        return [{'plate':self.name,
+                 'well':i.loc,
+                 'contents':i.contents,
+                 'vol':i.vol} for i in self]
+    @property
+    def xfer_record(self):
+        return [j for i in self for j in i.xfer_record] ## flattens list
 
 class SrcPlate(Plate):
     '''
@@ -238,9 +256,6 @@ class SrcPlate(Plate):
         self.ldv = ldv
         super().__init__(**args)
         self.wells = self.make_wells(len(self), well_type = SrcWell, ldv=self.ldv)
-    @property
-    def xfer_record(self):
-        return pd.DataFrame([j for i in self for j in i.xfer_record]) ## flattens list
 
 class DestPlate(Plate):
     '''

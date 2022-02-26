@@ -29,30 +29,24 @@ This causes some constraints and can mean that one compound might need to be ali
 
 ------------------
 
-## how to
 
-> todo
-
-
----------------
+## Examples
 
 ```python
 import echo
 
-src = echo.Src()
+src = echo.SrcPlate(name='src1',ldv=True)
+dest = echo.DestPlate(name='dest1')
 
-for i, j in zip(echo.vwells, ['cpd1','cpd2','cpd3']):
-	src.fill(well = i, name = j, vol = 20)
+for i,j,k in zip(echo.vwells, 
+                 ['cpd1','cpd2','cpd3'],
+                 src):
+    cpd = echo.Cpd(name=j, vol=100)
+    k.fill(cpd.sample(5))
 
-dest = echo.Dest()
+for i,j in zip(src[:3],dest):
+    i.xfer(j,1.5)
 
-dest.make_blocks(shape = (8,2))
-
-for i in dest.blocks:
-	for j, k in zip(i[:,0], i[0,:]):
-		src.xfer('cpd1', j, 10)
-		src.xfer('cpd1', k, 10)
-
-dest.picklist.to_csv('picklist.csv')
-print(dest.df)
+xfer_record = pd.DataFrame(src.xfer_record)
+xfer_record
 ```

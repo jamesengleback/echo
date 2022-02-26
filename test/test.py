@@ -31,11 +31,16 @@ class testMixture(TestCase):
         mix.__repr__()
         mix.vol
         mix.add(x)
+        echo.Mixture()
+        echo.Mixture([])
+        mix2 = echo.Mixture(fa(2),dmso(2))
+        mix3 = echo.Mixture(mix, mix2)
 
 class testWell(TestCase):
     def test(self):
         dmso=echo.Cpd(name='dmso',vol=50)
         fa=echo.Cpd(name='fa',vol=10)
+        well = echo.Well(loc='A1')
 
 class testSrcWell(TestCase):
     def test(self):
@@ -47,7 +52,23 @@ class testDestWell(TestCase):
 
 class testPlate(TestCase):
     def test(self):
-        pass
+        src = echo.SrcPlate()
+        for i,j,k in zip(echo.vwells, 
+                         [f'cpd{i}' for i in range(12)],
+                        src):
+            cpd = echo.Cpd(name=k, vol=100)
+            k.fill(cpd.sample(30))
+        dest = echo.DestPlate()
+        for i,j in zip(src[:3],dest):
+            i.xfer(j,1.5)
+        xfer_record = src.xfer_record
+        xfer_record = dest.xfer_record
+        src.wells
+        dest.wells
+        x = dest[0]
+        print(len(x.contents.cpds))
+        print(x)
+        #print(dest[:2])
 
 class testSrcPlate(TestCase):
     def test(self):
@@ -57,16 +78,17 @@ class testDestPlate(TestCase):
     def test(self):
         pass
 
-def main():
-    dmso = echo.Cpd(name = 'dmso', vol = 50)
-    fa = echo.Cpd(name = 'fa', vol=10)
+class testEdgeCases(TestCase):
+    def test(self):
+        src = echo.SrcPlate()
+        for i,j,k in zip(echo.vwells, 
+                         ['cpd1','cpd2','cpd3'],
+                        src):
+            cpd = echo.Cpd(name=k, vol=100)
+            k.fill(cpd.sample(1.5))
+        dest = echo.DestPlate()
+        for i,j in zip(dest, src):
+            i.__repr__()
+            #j.__repr__()
+            break
 
-    dest = echo.Dest()
-    dest.fill('A1', dmso, 2)
-    dest.fill('A1', fa, 5)
-    print([i.contents for i in dest.wells.values()])
-    print(dest.df)
-
-
-if __name__ == '__main__':
-    main()
