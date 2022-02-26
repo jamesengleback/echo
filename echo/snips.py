@@ -24,20 +24,10 @@ class Cpd:
 
         self.name = name 
         self.vol = vol
-        self._children = []
+        self.children = []
         self.parent = parent
         self.plate = plate
         self.well = well
-
-    def __call__(self, x):
-        assert type(x) == int or type(x) == float
-        return self.sample(x)
-    def __add__(self, x):
-        assert isinstance(x, Cpd) or isinstance(x, Mixture)
-        return Mixture(self, x)
-    def __sub__(self, x):
-        assert type(x) == int or type(x) == float
-        return self(x)
 
     def __repr__(self):
         if self.plate is not None:
@@ -50,89 +40,99 @@ class Cpd:
             well_loc = None
         return f'{self.name} {self.vol}µl  plate: {plate_name} well: {well_loc}'
 
-    @property
-    def children(self):
-        ''' return flat list of children Cpd's, their children etc '''
-        def recv(cpd): # recursive search
-            l = []
-            for i in cpd._children:
-                l.append(i)
-                if len(i._children) > 0:
-                    l += (recv(i))
-            return l
-        return recv(self)
-
     def sample(self, vol):
-        ''' return Cpd(vol=vol,name=self.name),self.vol -= vol '''
         if vol < self.vol:
             self.vol -= vol 
-            sample = Cpd(self.name, vol, parent=self)
-            self._children.append(sample)
+            sample = Cpd(self.name, vol, parent = self)
+            self.children.append(sample)
             return sample
         else:
             raise OverDrawnException(f'Requested vol: {vol} Available vol: {self.vol}µl')
 
+    def xfer(self, dest_well, vol):
+        # find all children, make transfers
+        children = self.get_children()
+        available_vol = sum([i.well.available_vol for i in children])
+        if vol <= available_vol:
+            unique_plates = set([i.plate for i in children])
+            vol_todo = vol # copy????
+            for i in unique_plates:
+                wells = [j for j in children if j.plate == i]
+                for j in wells:
+                    if isinstance(j.well, SrcWell):
+                        available_vol = j.well.available_vol 
+                        if vol_todo > available_vol:
+                            xfer_vol = available_vol 
+                        else:
+                            xfer_vol = vol_todo
+                        if xfer_vol != 0: 
+                            j.well.xfer(dest_well, xfer_vol)
+                            vol_todo -= xfer_vol
+                        if vol_todo == 0:
+                            break
+        else:
+            raise NotEnoughException(f'cpd:{self}, available_vol: {available_vol}µl, requested: {vol}µl')
+        if vol_todo != 0:
+            raise UnderFillWarning(f'cpd:{self}, available_vol: {available_vol}µl, requested: {vol}µl')
+    def get_children(self):
+        l = []
+        if len(self.children) > 0:
+            for i in self.children:
+                l.append(i)
+                l.append(i.get_children())
+        # from https://stackoverflow.com/questions/12472338/flattening-a-list-recursively
+        flatten=lambda l: sum(map(flatten,l),[]) if isinstance(l,list) else [l] 
+        return flatten(l)
 
 class Mixture:
     '''
-    class for mixtures of compounds
     '''
     def __init__(self, 
-                 *args):
-        self.cpds = list(args)
+                 cpds=[]):
+        self.cpds = cpds
 
-    def __call__(self, vol):
-        assert isinstance(vol, float) or isinstance(vol, int)
-        return self.sample(vol)
-    def __add__(self, x):
-        assert isinstance(x, Cpd) or isinstance(x, Mixture)
-        self.add(x)
-        return self
-    def __sub__(self, x):
-        assert isinstance(x, float) or isinstance(x, int)
-        return self(x)
-    def __sub__(self, x):
-        assert isinstance(x, Cpd) or isinstance(x, Mixture)
-        return self.sample(x.vol)
     def __repr__(self):
         if len(self.cpds) != 0:
             d = {i.name:i.vol for i in self.cpds}
         else:
             d = {}
         return f'{d}'
-
     @property
     def vol(self):
-        ''' dum of compound vols '''
         return sum([i.vol for i in self.cpds])
-
     def sample(self, vol):
-        ''' return Mixture(vol=vol,name=self.name), 
-            sample proportionally from self.cpds '''
         if vol < self.vol:
             fracs = [i.vol / self.vol  for i in self.cpds]
             sample = Mixture([i.sample(j * vol) for i, j in zip(self.cpds, fracs)]) # **prob
+            self.consolidate()
+            sample.consolidate()
             return sample
         else:
             raise OverDrawnException(f'Requested vol: {vol}µl Available vol: {self.vol}µl')
-
-    def add(self, cpd):
-        ''' add Cpd to mixture '''
+    def append(self, cpd):
         if isinstance(cpd, Cpd):
             self.cpds.append(cpd)
         elif isinstance(cpd, Mixture):
             self.cpds += cpd.cpds 
         else:
-            raise Exception('uh oh')
+            # error 
+            print('uh oh')
+        self.consolidate()
+    def consolidate(self):
+        # pool compounds with matching names
+        l = []
+        uniq_names = set([i.name for i in self.cpds])
+        for i in uniq_names:
+            l2 = []
+            for j in self.cpds:
+                if j.name == i:
+                    l2.append(j)
+            assert len(l2) != 0
+            l.append(Cpd(name=i, vol=sum([k.vol for k in l2])))
+        self.cpds = l
 
 class Well:
-    ''' class for plate wells
-        attribues:
-            loc
-            plate
-            contents
-        methods
-            fill
+    '''
     '''
     def __init__(self, 
                  loc, 
@@ -152,7 +152,7 @@ class Well:
     def fill(self, sample):
         sample.well = self
         sample.plate = self.plate
-        self.contents.add(sample)
+        self.contents.append(sample)
 
 class SrcWell(Well):
     '''
@@ -345,3 +345,4 @@ class IHaventWrittenThisWellException(Exception):
 
 hwells = [f'{i}{j}' for i in ascii_uppercase[:16] for j in range(1,25)]
 vwells = [f'{i}{j}' for i in range(1,25) for j in ascii_uppercase[:16]]
+
