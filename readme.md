@@ -51,4 +51,9 @@ xfer_record = pd.DataFrame(src.xfer_record)
 xfer_record
 ```
 
-|    | SrcPlate   | Cpd      | SrcWell   | Destination Plate Name   | DestWell   |   Transfer Volume /nl |\n|---:|:-----------|:---------|:----------|:-------------------------|:-----------|----------------------:|\n|  0 | src1       | ['cpd1'] | A1        | dest1                    | A1         |                  1500 |\n|  1 | src1       | ['cpd2'] | A2        | dest1                    | A2         |                  1500 |\n|  2 | src1       | ['cpd3'] | A3        | dest1                    | A3         |                  1500 |
+|    | SrcPlate   | Cpd      | SrcWell   | Destination Plate Name   | DestWell   |   Transfer Volume /nl |
+|----|------------|----------|-----------|--------------------------|------------|-----------------------|
+|  0 | src1       | ['cpd1'] | A1        | dest1                    | A1         |                  1500 |
+|  1 | src1       | ['cpd2'] | A2        | dest1                    | A2         |                  1500 |
+|  2 | src1       | ['cpd3'] | A3        | dest1                    | A3         |                  1500 |
+
